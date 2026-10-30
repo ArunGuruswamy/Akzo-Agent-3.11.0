@@ -8,7 +8,13 @@
     ],
     "onDemand": {
       "skills/shared/business-rule-branch-coverage/guide.md": "\\brules?\\b|branch|decision|condition|yes/no|\\bif\\b|state|transition|duplicate|legacy|plugin|workflow|bug|fix|review|pbi|requirement"
-    }
+    },
+    "riskChurnLines": 200,
+    "riskRules": [
+      { "level": "high", "path": "\\.(csproj|fsproj|vbproj|sln|slnx)$", "reason": "project or solution file: changes what is built and referenced" },
+      { "level": "high", "path": "(^|/)Directory\\.(Packages|Build)\\.(props|targets)$", "reason": "central package or build settings: affects every project" },
+      { "level": "high", "path": "(^|/)[^/]*\\.runsettings$", "reason": "test and coverage settings: changes what the quality gate measures" }
+    ]
   },
   "profiles": [
     {
@@ -50,6 +56,17 @@
         "maxLineLength": 0,
         "broadCatch": "warning"
       },
+      "riskRules": [
+        { "level": "high", "path": "(^|/)ServiceRegistration[^/]*\\.cs$", "reason": "dependency injection registration" },
+        { "level": "high", "path": "(^|/)(Program|Startup)\\.cs$", "reason": "host startup and middleware pipeline" },
+        { "level": "high", "path": "(?i)(exception|error|routing)[^/]*middleware[^/]*\\.cs$", "reason": "exception or routing middleware: shapes every HTTP response" },
+        { "level": "high", "path": "\\.graphql$|(^|/)\\.graphqlrc\\.json$", "reason": "GraphQL schema, operation, or client configuration" },
+        { "level": "high", "path": "(?i)(^|/)generated/[^/]*\\.cs$|\\.(g|generated)\\.cs$", "reason": "generated GraphQL client: regenerate, never hand-edit" },
+        { "level": "high", "path": "(?i)(^|/)(contracts?|dtos?)/|(Request|Response|Dto|Contract)\\.cs$", "reason": "API contract: consumers depend on its shape" },
+        { "level": "medium", "path": "Handler\\.cs$", "reason": "command or query handler" },
+        { "level": "medium", "path": "Validator\\.cs$", "reason": "validation rules" },
+        { "level": "medium", "path": "Service\\.cs$", "reason": "service logic" }
+      ],
       "core": [
         "skills/dab/architecture/guide.md",
         "skills/dab/testing/guide.md",
@@ -103,6 +120,15 @@
         "maxLineLength": 200,
         "broadCatch": "warning"
       },
+      "riskRules": [
+        { "level": "high", "path": "(^|/)ServiceRegistration[^/]*\\.cs$", "reason": "dependency injection registration" },
+        { "level": "high", "path": "(^|/)(Program|Startup)\\.cs$", "reason": "host startup and middleware pipeline" },
+        { "level": "high", "path": "(?i)(exception|error|routing)[^/]*middleware[^/]*\\.cs$", "reason": "exception or routing middleware: shapes every HTTP response" },
+        { "level": "high", "path": "(?i)(^|/)(contracts?|dtos?)/|(Request|Response|Dto|Contract)\\.cs$", "reason": "API contract: consumers depend on its shape" },
+        { "level": "medium", "path": "Handler\\.cs$", "reason": "command or query handler" },
+        { "level": "medium", "path": "Validator\\.cs$", "reason": "validation rules" },
+        { "level": "medium", "path": "Service\\.cs$", "reason": "service and Xrm logic" }
+      ],
       "core": [
         "skills/cdms/architecture/guide.md",
         "skills/cdms/run-tests/guide.md",

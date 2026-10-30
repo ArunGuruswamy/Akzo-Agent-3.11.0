@@ -47,7 +47,7 @@
 #>
 param(
     [Parameter(Position = 0, Mandatory = $true)]
-    [ValidateSet('home', 'registry', 'state', 'inbox', 'pick', 'intake', 'attach', 'role', 'discover', 'task', 'graph', 'sonar', 'coverage', 'remember', 'forget', 'context', 'policy', 'authorize', 'guard', 'scan', 'security', 'purge', 'branchinfo', 'branchcreate', 'branchuse', 'tasks', 'snapshot', 'profile', 'review', 'affected', 'guidance', 'decide')]
+    [ValidateSet('home', 'registry', 'state', 'inbox', 'pick', 'intake', 'attach', 'role', 'discover', 'task', 'graph', 'sonar', 'coverage', 'remember', 'forget', 'context', 'policy', 'authorize', 'guard', 'scan', 'security', 'purge', 'branchinfo', 'branchcreate', 'branchuse', 'tasks', 'snapshot', 'profile', 'review', 'affected', 'guidance', 'decide', 'trace', 'prtext')]
     [string]$Command,
     [string]$Reference,       # authorize: the approval you hold (ticket, policy, or approver)
     [string]$Classification,  # authorize: public | internal | confidential (restricted needs an administrator policy)
@@ -1240,6 +1240,87 @@ function Read-Approvals([string]$taskDir) {
     if (-not (Test-Path -LiteralPath $f)) { return @() }
     @(foreach ($l in [IO.File]::ReadAllLines($f)) { if ($l.Trim()) { try { $l | ConvertFrom-Json } catch { } } })
 }
+function Read-TrxResults([string[]]$files) {   # test full name -> outcome; a newer file wins, and within one file a failed data row wins
+    $res = @{}
+    foreach ($f in @($files | Sort-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc })) {
+        $x = try { [xml](Get-Content -LiteralPath $f -Raw -Encoding UTF8) } catch { $null }
+        if (-not $x) { continue }
+        $cls = @{}
+        foreach ($u in @($x.GetElementsByTagName('UnitTest'))) { $m = @($u.GetElementsByTagName('TestMethod'))[0]; if ($m) { $cls[$u.GetAttribute('id')] = ($m.GetAttribute('className') -split ',')[0].Trim() } }
+        $mine = @{}
+        foreach ($t in @($x.GetElementsByTagName('UnitTestResult'))) {
+            $n = $t.GetAttribute('testName') -replace '\s*\(.*$', ''   # data rows: Method(x: 1) -> Method
+            $c = $cls[$t.GetAttribute('testId')]
+            $full = if ($c -and -not $n.StartsWith("$c.")) { "$c.$n" } else { $n }
+            if ($mine.ContainsKey($full) -and $res[$full].outcome -ne 'Passed') { continue }
+            $mine[$full] = 1; $res[$full] = [pscustomobject]@{ outcome = $t.GetAttribute('outcome'); file = $f }
+        }
+    }
+    $res
+}
+function Get-Trace([string]$specDir, $results) {   # ACs of spec.md -> the tests plan.md section 6 lists for them -> their TRX outcome
+    $norm = { param($s) ($s -replace '[\s-]', '').ToUpperInvariant() }   # AC-1, AC 1, ac1 -> AC1
+    $acs = [ordered]@{}
+    $spec = Join-Path $specDir 'spec.md'
+    if (Test-Path -LiteralPath $spec) { foreach ($l in [IO.File]::ReadAllLines($spec)) { if ($l -match '^\|\s*(AC[\s-]?\d+)\s*\|\s*([^|]*)\|') { $acs[(& $norm $Matches[1])] = @{ req = $Matches[2].Trim(); tests = New-Object Collections.Generic.List[string] } } } }
+    $plan = Join-Path $specDir 'plan.md'; $col = $null
+    if (Test-Path -LiteralPath $plan) {
+        foreach ($l in [IO.File]::ReadAllLines($plan)) {
+            $cells = @($l.Trim().Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+            if (-not $col) {
+                if ($l -match '^\|.*\|\s*Test \(file::name\)\s*\|') { $col = @{}; for ($i = 0; $i -lt $cells.Count; $i++) { if ($cells[$i] -eq 'AC') { $col.ac = $i } elseif ($cells[$i] -eq 'REQ') { $col.req = $i } elseif ($cells[$i] -like 'Test (*') { $col.test = $i } } }
+                continue
+            }
+            if ($l -notmatch '^\s*\|') { break }   # the matrix ended
+            if ($l -match '^\s*\|\s*-') { continue }
+            foreach ($a in [regex]::Matches("$($cells[$col.ac])", '(?i)AC[\s-]?\d+')) {
+                $k = & $norm $a.Value
+                if (-not $acs.Contains($k)) { $acs[$k] = @{ req = "$($cells[$col.req])"; tests = New-Object Collections.Generic.List[string] } }
+                foreach ($t in ("$($cells[$col.test])" -split ',|;|<br\s*/?>')) { $t = $t.Trim().Trim('`').Trim(); if ($t -and $t -notmatch '^(-|—|n/?a|none)$') { $acs[$k].tests.Add($t) } }
+            }
+        }
+    }
+    $keys = @($results.Keys)
+    foreach ($k in @($acs.Keys)) {
+        $tests = @(foreach ($t in $acs[$k].tests) {
+                $tf, $tn = if ($t -match '^(.*)::(.+)$') { $Matches[1], $Matches[2] } else { '', $t }
+                $tn = $tn.Trim() -replace '\(.*$', ''
+                $hits = @($keys | Where-Object { $_ -eq $tn -or $_.EndsWith(".$tn") } | Sort-Object)
+                if ($hits.Count -gt 1 -and $tf) {   # the file name of file::name picks the class
+                    $stem = [IO.Path]::GetFileNameWithoutExtension((($tf -replace '\\', '/') -split '/')[-1])
+                    $narrow = @($hits | Where-Object { $_ -eq "$stem.$tn" -or $_.EndsWith(".$stem.$tn") }); if ($narrow.Count) { $hits = $narrow }
+                }
+                $o = if (-not $hits.Count) { 'not found' } elseif ($hits.Count -gt 1) { "ambiguous: $($hits -join ', ')" } else { "$($results[$hits[0]].outcome)" }
+                [pscustomobject][ordered]@{ test = (Protect-Text $t); outcome = $o; matched = $(if ($hits.Count -eq 1) { $hits[0] } else { '' }) } })
+        $st = if (-not $tests.Count) { 'MISSING' } elseif (@($tests | Where-Object { $_.outcome -match '^(Failed|Error|Timeout|Aborted)$' }).Count) { 'FAILING' } elseif (-not @($tests | Where-Object { $_.outcome -ne 'Passed' }).Count) { 'COVERED' } else { 'NOT RUN' }
+        [pscustomobject][ordered]@{ ac = $k; req = $acs[$k].req; status = $st; tests = $tests }
+    }
+}
+function Get-TraceReport([string]$dir, [string]$resultsPath) {   # trace output for one task folder; results from -Path, else the evidence folder and the repository's TestResults
+    $j = try { Get-Content -LiteralPath (Join-Path $dir 'task.json') -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $null }
+    $sd = if ($j.specDir) { "$($j.specDir)" } else { $dir }
+    $roots = @(if ($resultsPath) { $resultsPath.Trim('"') } else {
+            # shortcut: walks the whole repository for TestResults folders; pass -Path when that is slow
+            $rr = Get-Registry | Where-Object { $_.id -eq (Split-Path (Split-Path $dir) -Leaf) } | Select-Object -First 1
+            Join-Path $dir 'evidence'
+            if ($rr -and (Test-Dir $rr.path)) { Get-ChildItem -LiteralPath $rr.path -Recurse -Directory -Filter TestResults -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName } } })
+    if ($resultsPath -and -not (Test-Path -LiteralPath $roots[0])) { throw "-Path '$resultsPath' was not found." }
+    $trx = @($roots | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object { if ((Get-Item -LiteralPath $_).PSIsContainer) { Get-ChildItem -LiteralPath $_ -Recurse -Filter *.trx -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName } } else { $_ } })
+    $acs = @(Get-Trace $sd (Read-TrxResults $trx))
+    $cnt = { param($s) @($acs | Where-Object { $_.status -eq $s }).Count }
+    $missing = & $cnt 'MISSING'; $failing = & $cnt 'FAILING'; $notRun = & $cnt 'NOT RUN'
+    $status = if (-not $acs.Count) { 'NO_ACS' } elseif ($missing -or $failing) { 'BLOCKED' } elseif ($notRun) { 'NOT_RUN' } else { 'COVERED' }
+    [pscustomobject][ordered]@{ status = $status; pbi = (Split-Path $dir -Leaf); spec = (Join-Path $sd 'spec.md'); plan = (Join-Path $sd 'plan.md'); searched = $roots
+        results = @($trx | ForEach-Object { [pscustomobject]@{ file = $_; written = (Get-Item -LiteralPath $_).LastWriteTime.ToString('yyyy-MM-dd HH:mm') } })
+        counts = [ordered]@{ covered = (& $cnt 'COVERED'); failing = $failing; notRun = $notRun; missing = $missing }
+        acs = $acs
+        next = $(switch ($status) {
+                'NO_ACS' { 'spec.md has no acceptance criteria rows (| AC1 | REQ-1 | ... |); write them before tracing.' }
+                'BLOCKED' { 'G5 is blocked: write a failing test for each MISSING AC and name it in the plan.md section 6 Test column (file::name); fix the cause of each FAILING test; run the tests and trace again.' }
+                'NOT_RUN' { 'Run the listed tests so their TRX results exist, then trace again; an ambiguous or not-found name needs the exact file::name.' }
+                default { 'Every AC has a passing test: build the handover matrix from this output.' } })
+    }
+}
 function Update-TaskJson([string]$dir, [hashtable]$set) {   # merge keys into task.json; other keys are kept
     $f = Join-Path $dir 'task.json'
     $o = if (Test-Path -LiteralPath $f) { try { Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json } catch { [pscustomobject]@{} } } else { [pscustomobject]@{} }
@@ -1522,6 +1603,26 @@ function Get-AffectedTests($r, [string]$against) {   # staged test selection: ch
         regression = @($affected | Where-Object { $proj[$_].test } | Sort-Object | ForEach-Object { "dotnet test $(& $q $_)" })
     }
 }
+function Get-DiffRisk($r, $def, [string]$against) {   # changed files ranked by the risk rules of profiles.json (shared + the detected profile only)
+    $root = $r.path; $defs = Read-Profiles
+    $rules = @(@($defs.shared.riskRules) + @($def.riskRules) | Where-Object { $_ })
+    $churnMax = if ($defs.shared.riskChurnLines) { [int]$defs.shared.riskChurnLines } else { 200 }
+    $churn = @{}
+    foreach ($l in @(Invoke-Quiet git -C $root -c core.quotepath=off diff --numstat --no-renames $against)) {
+        if ($l -match '^(\d+|-)\t(\d+|-)\t(.+)$') { $churn[$Matches[3]] = $(if ($Matches[1] -eq '-') { 0 } else { [int]$Matches[1] + [int]$Matches[2] }) }   # '-': binary
+    }
+    foreach ($u in @(Invoke-Quiet git -C $root -c core.quotepath=off ls-files --others --exclude-standard)) { $churn[$u] = @(Get-Content -LiteralPath (Join-Path $root $u) -ErrorAction SilentlyContinue).Count }
+    $untested = @((Get-AffectedTests $r $against).untestedChanges)
+    $rank = @{ high = 0; medium = 1; low = 2 }
+    $out = foreach ($f in @($churn.Keys | Sort-Object)) {
+        $hit = @($rules | Where-Object { $f -match $_.path })
+        $level = 'low'; foreach ($h in $hit) { if ($rank[$h.level] -lt $rank[$level]) { $level = $h.level } }
+        $why = @(@($hit | ForEach-Object { $_.reason }) + @(if ($untested -contains $f) { 'no test named after it' }) + @(if ($churn[$f] -gt $churnMax) { "$($churn[$f]) changed lines (over $churnMax)" }))
+        [pscustomobject][ordered]@{ file = $f; level = $level; reasons = $why }
+    }
+    $note = if (-not @($def.riskRules | Where-Object { $_ }).Count) { "No profile risk rules$(if ($def) { " for $($def.id)" }): only the shared build-file rules apply; other files are low." } else { '' }
+    [pscustomobject]@{ risk = @($out | Where-Object { $_ } | Sort-Object { $rank[$_.level] }, file); note = $note }
+}
 function Get-ReviewFindings($r, $def, [string]$against) {
     $root = $r.path
     $changed = Get-ChangedLines $root $against
@@ -1681,6 +1782,25 @@ function Get-ReviewFindings($r, $def, [string]$against) {
     }
     foreach ($p in @($all | Where-Object { $_ -match '(?i)\.cs$' -and $_ -match $genRx -and $_ -notmatch '(?i)(^|/)(bin|obj)/' })) {
         if ((Get-Item -LiteralPath (Join-Path $root $p)).Length -eq 0) { & $add 'generated-empty' 'error' $p 0 'Generated file is empty: code generation failed or was interrupted. Rerun the repository''s generation command and build; never hand-edit or pick a side of a generated file.' '' }
+    }
+    # The developer's own regex rules (profiles-custom\review-rules.json) on changed lines; a bad file or rule is a warning, never a crash.
+    $crFile = Join-Path $CustomProfilesDir 'review-rules.json'
+    if (Test-Path -LiteralPath $crFile) {
+        $parsed = try { Get-Content -LiteralPath $crFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { & $add 'custom-rule-invalid' 'warning' $crFile 0 "review-rules.json is not valid JSON ($($_.Exception.Message)); no custom rule was applied." ''; $null }
+        foreach ($c in $parsed) {   # foreach, not @(): ConvertFrom-Json in 5.1 emits a JSON array as one object
+            $rx = $null
+            $why = if (-not "$($c.id)") { 'no id' } elseif ("$($c.severity)" -notin 'error', 'warning') { "severity '$($c.severity)' is not error or warning" } elseif (-not "$($c.regex)") { 'no regex' } elseif (-not "$($c.message)") { 'no message' } else { '' }
+            if (-not $why) { try { $rx = [regex]::new("$($c.regex)", [Text.RegularExpressions.RegexOptions]::None, [TimeSpan]::FromSeconds(1)) } catch { $why = "the regex does not compile ($($_.Exception.GetBaseException().Message))" } }
+            if ($why) { & $add 'custom-rule-invalid' 'warning' $crFile 0 "Custom rule $(if ($c.id) { "'$($c.id)' " })skipped: $why." ''; continue }
+            if ($c.profile -and "$($c.profile)" -ne '*' -and "$($c.profile)" -ne "$($def.id)") { continue }
+            $glob = if ($c.pathGlob) { "$($c.pathGlob)" } else { '*' }
+            foreach ($p in @($changed.Keys | Where-Object { $_ -like $glob -and $_ -notmatch $genRx } | Sort-Object)) {
+                $full = Join-Path $root $p; if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { continue }
+                $t = if ($lines.ContainsKey($p)) { $lines[$p] } else { @([IO.File]::ReadAllLines($full)) }
+                try { foreach ($n in @($changed[$p] | Sort-Object -Unique)) { if ($n -le $t.Count -and $rx.IsMatch($t[$n - 1])) { & $add "custom:$($c.id)" "$($c.severity)" $p $n (Protect-Text "$($c.message)") '' } } }
+                catch { & $add 'custom-rule-invalid' 'warning' $crFile 0 "Custom rule '$($c.id)' stopped on $p (the regex took too long); simplify the pattern." ''; break }
+            }
+        }
     }
     foreach ($c in @(Invoke-Quiet git -C $root -c core.quotepath=off diff --check $against)) {
         if ($c -match '^(.+?):(\d+):\s*(.+)$') { & $add 'diff-check' 'error' $Matches[1] ([int]$Matches[2]) "git diff --check: $($Matches[3])" '' }
@@ -2376,10 +2496,16 @@ if ($Command -eq 'coverage') {
             uncovered = (Join-Ranges $uncovered); partialBranches = (Join-Ranges @($changed[$p] | Where-Object { $e.partial.ContainsKey($_) }))
         }
     }
+    $pct = if ($totCov) { [math]::Round(100 * $totHit / $totCov, 1) } else { $null }
+    $rq = $r.cfg.quality.coverage; $rqn = 0.0
+    $own = $null -ne $rq -and [double]::TryParse("$rq", [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$rqn) -and $rqn -gt 0 -and $rqn -le 100
+    $limit = if ($own) { $rqn } else { 80 }
     [pscustomobject][ordered]@{
         repo = $r.id; reports = $reports; changedFiles = $changed.Count
         coverableChangedLines = $totCov; coveredChangedLines = $totHit
-        percent = $(if ($totCov) { [math]::Round(100 * $totHit / $totCov, 1) } else { $null })
+        percent = $pct
+        threshold = [ordered]@{ percent = $limit; source = $(if ($own) { 'repository (quality.coverage in the registry)' } elseif ($null -ne $rq) { "default (quality.coverage '$rq' is not a percent from 1 to 100)" } else { 'default' }); note = 'A coverage condition of the server quality gate (sonar -Check gate) replaces this threshold.' }
+        meetsThreshold = $(if ($null -eq $pct) { $null } else { $pct -ge $limit })
         files = $rows; notInReport = $notInReport
     } | ConvertTo-Json -Depth 3
     exit 0
@@ -2496,9 +2622,12 @@ if ($Command -eq 'review') {
     $def = if ($prof.profile) { @((Read-Profiles).profiles) | Where-Object { $_.id -eq $prof.profile } | Select-Object -First 1 } else { $null }
     $res = Get-ReviewFindings $r $def $against
     $err = @($res.findings | Where-Object { $_.severity -eq 'error' }).Count; $warn = @($res.findings | Where-Object { $_.severity -eq 'warning' }).Count
+    $dr = Get-DiffRisk $r $def $against; $high = @($dr.risk | Where-Object { $_.level -eq 'high' }).Count
     [pscustomobject][ordered]@{ status = $(if ($err) { 'FINDINGS' } elseif ($warn) { 'WARNINGS' } else { 'PASSED' }); repo = $r.id
         profile = $(if ($prof.profile) { $prof.profile } else { "none ($($prof.status))" }); scope = $scope; changedFiles = $res.files; csharpFilesReviewed = $res.reviewed; errors = $err; warnings = $warn
         findings = @($res.findings)
+        highRisk = $high; risk = @($dr.risk)
+        riskNext = $(@(if ($high) { 'High-risk files changed: run affected stage D (the full suite) before G5 and list the risk in the handover.' }; if ($dr.note) { $dr.note }) -join ' ')
         scenarios = @('1 PUT function converts the validation exception the middleware handles', '2 POST function converts it', '3 duplicate changes', '4 validator not following sibling FluentValidation pattern', '5 command/query dependencies misplaced', '6 missing or outdated XML documentation')
         notChecked = @('build, tests, and analyzers (run them)', 'SonarCloud (sonar -Check gate/issues, or "not verified")', 'business behavior and API consumers (read them)', 'review comment threads, including duplicate comments (read the PR)') } | ConvertTo-Json -Depth 4
     exit 0
@@ -2545,6 +2674,65 @@ if ($Command -eq 'decide') {
         default { 'Act on the instruction; the gate status is unchanged and nothing was approved.' } }
     $out.gates = $after.gates
     [pscustomobject]$out | ConvertTo-Json -Depth 4
+    exit 0
+}
+
+# trace: acceptance criteria -> the tests plan.md section 6 lists for them -> their latest TRX outcome. Read-only.
+if ($Command -eq 'trace') {
+    if (-not $Id) { throw 'trace needs -Id <PBI> (and -Path <.trx file or folder> when the results are not under TestResults or the task evidence folder).' }
+    Get-TraceReport (Find-TaskDir $Id $Repo) $Path | ConvertTo-Json -Depth 6
+    exit 0
+}
+
+# prtext: a pull request description in SDD format from spec, plan, trace, review risk, the Sonar table, and the approval
+# times. Writes <task>\evidence\pr-description.md; never creates a pull request, commits, or pushes.
+if ($Command -eq 'prtext') {
+    if (-not $Id) { throw 'prtext needs -Id <PBI> (and -Path <.trx file or folder> when the test results are elsewhere).' }
+    $dir = Find-TaskDir $Id $Repo
+    $j = try { Get-Content -LiteralPath (Join-Path $dir 'task.json') -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $null }
+    $sd = if ($j.specDir) { "$($j.specDir)" } else { $dir }
+    $specT = @(if (Test-Path -LiteralPath (Join-Path $sd 'spec.md')) { [IO.File]::ReadAllLines((Join-Path $sd 'spec.md')) })
+    $planT = @(if (Test-Path -LiteralPath (Join-Path $sd 'plan.md')) { [IO.File]::ReadAllLines((Join-Path $sd 'plan.md')) })
+    $field = { param($lines, $rx) $hit = @($lines | Where-Object { $_ -match $rx } | Select-Object -First 1); if ($hit.Count -and ($v = ($hit[0] -replace $rx, '').Trim())) { $v } else { '(not written)' } }
+    $md = New-Object Collections.Generic.List[string]
+    $md.Add("## $Id $(if ($j.title) { $j.title } else { & $field $specT '^#\s*Spec:\s*\S+\s*' })"); $md.Add('')
+    $md.Add('### Summary'); $md.Add("- Problem: $(& $field $specT '^\s*-\s*Problem:')"); $md.Add("- Objective: $(& $field $specT '^\s*-\s*Objective:')"); $md.Add("- Gap map: $(& $field $specT '^Counts:')"); $md.Add('')
+    $md.Add('### Tasks'); $md.Add('| Task | Status |'); $md.Add('|------|--------|')
+    foreach ($t in @(Get-PlanTasks (Join-Path $sd 'plan.md') (Read-Workflow))) { $md.Add("| $($t.title) | $($t.status)$(if ($t.detail) { ": $($t.detail)" }) |") }
+    $tr = Get-TraceReport $dir $Path
+    $md.Add(''); $md.Add("### Acceptance criteria (trace: $($tr.status))"); $md.Add('| AC | REQ | Status | Tests |'); $md.Add('|----|-----|--------|-------|')
+    foreach ($a in @($tr.acs)) { $md.Add("| $($a.ac) | $($a.req) | $($a.status) | $(@($a.tests | ForEach-Object { "$($_.test) ($($_.outcome))" }) -join '<br>') |") }
+    $md.Add("Test results: $(if (@($tr.results).Count) { @($tr.results | ForEach-Object { "$(Split-Path $_.file -Leaf) ($($_.written))" }) -join ', ' } else { 'none found' })")
+    $rid = if ($j.repo) { "$($j.repo)" } else { Split-Path (Split-Path $dir) -Leaf }
+    $md.Add(''); $md.Add('### Change risk')
+    try {
+        $r = Resolve-Repo $rid; $null = Assert-Preflight $r
+        $against, $scope = Get-ChangeBase $r "$($j.baseBranch)"
+        $prof = Get-RepoProfile $r $Key
+        $def = if ($prof.profile) { @((Read-Profiles).profiles) | Where-Object { $_.id -eq $prof.profile } | Select-Object -First 1 } else { $null }
+        $dr = Get-DiffRisk $r $def $against
+        $shown = @($dr.risk | Where-Object { $_.level -ne 'low' })
+        $md.Add("Scope: $scope"); $md.Add('| File | Level | Reasons |'); $md.Add('|------|-------|---------|')
+        foreach ($x in $shown) { $md.Add("| ``$($x.file)`` | $($x.level) | $(@($x.reasons) -join '; ') |") }
+        $md.Add("Low-risk files: $(@($dr.risk).Count - $shown.Count)$(if ($dr.note) { ". $($dr.note)" })")
+    } catch { $md.Add("Not available: $($_.Exception.Message)") }
+    # Sonar: the plan's own table; only sources (a) and (b) are SonarCloud results.
+    $src = & $field $planT '^Source:'; $gateLine = & $field $planT '^Gate:'   # not $gate: -Gate has a ValidateSet
+    $ti = [array]::FindIndex([string[]]$planT, [Predicate[string]] { param($l) $l -match '^\|\s*Item\s*\|\s*Baseline\s*\|' })
+    $rows = @(if ($ti -ge 0) { for ($i = $ti; $i -lt $planT.Count -and $planT[$i] -match '^\|'; $i++) { $planT[$i] } })
+    $filled = $src -notmatch '^<' -and @($rows | Select-Object -Skip 2 | Where-Object { "$($_.Trim().Trim('|').Split('|')[2])".Trim() }).Count
+    $server = $filled -and $src -match '^\(?[ab]\)'
+    $md.Add(''); $md.Add('### Quality (SonarCloud)')
+    if (-not $filled) { $md.Add("SonarCloud not verified: the plan's Sonar table has no final values.") }
+    else { if (-not $server) { $md.Add("SonarCloud not verified (source: $src); the table is local evidence, not a SonarCloud result.") }; $md.Add("Source: $src"); $md.Add("Gate: $gateLine"); foreach ($l in $rows) { $md.Add($l) } }
+    $ap = @(Read-Approvals $dir | Where-Object { $_.decision -eq 'approve' } | Sort-Object { [datetime]$_.at })
+    $md.Add(''); $md.Add('### Process')
+    $md.Add("Elapsed between approvals (includes review time; not agent time): $(if ($ap.Count) { @(for ($i = 0; $i -lt $ap.Count; $i++) { if ($i) { "$($ap[$i].gate) +$([math]::Round(([datetime]$ap[$i].at - [datetime]$ap[$i - 1].at).TotalHours, 1)) h" } else { "$($ap[0].gate) $(([datetime]$ap[0].at).ToString('yyyy-MM-dd HH:mm'))" } }) -join ' -> ' } else { 'no approvals recorded' })")
+    $body = Protect-Text (($md -join "`n") + "`n")
+    $ev = Join-Path $dir 'evidence'; New-Item -ItemType Directory -Force $ev | Out-Null
+    $outFile = Join-Path $ev 'pr-description.md'; Write-TextAtomic $outFile $body
+    [pscustomobject][ordered]@{ status = 'WRITTEN'; pbi = $Id; file = $outFile; trace = $tr.status; sonar = $(if ($server) { 'SonarCloud result' } else { 'not verified' }); markdown = $body
+        next = 'Paste the markdown into the pull request yourself; this command never creates a pull request, commits, or pushes.' } | ConvertTo-Json -Depth 3
     exit 0
 }
 

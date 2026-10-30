@@ -19,4 +19,4 @@ Shipped baseline from the 3.6.0 brief; the team's `add-feature` skill replaces i
    Catch only exceptions you handle, in the way sibling services handle them; let the rest reach the function's existing
    error handling. Record the decision in the plan.
 7. **XML documentation** on every new or changed public production API (`cdms-xml-documentation`).
-8. **Tests:** MSTest and NSubstitute, as in `cdms-run-tests`; at least 80% coverage of changed lines where measurable.
+8. **Tests:** MSTest and NSubstitute, as in `cdms-run-tests`; at least the repository's threshold (default 80%) coverage of changed lines where measurable.

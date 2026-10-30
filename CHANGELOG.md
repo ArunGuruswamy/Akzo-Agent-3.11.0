@@ -2,6 +2,28 @@
 
 Akzo SDD Agent — Developed and maintained by Arun RG. The version is in `VERSION`; `install.ps1 -Verify` shows the installed and available versions.
 
+## 3.11.0 — 2026-10-29
+Change risk, acceptance-criteria trace, PR text, custom review rules, and a per-repository coverage threshold. Gates G1-G5 and G8, `decide`, `guard`, repository memory, and profile isolation are unchanged. No new dependency, tool, or network call.
+
+**Added**
+- `review` returns `risk`: each changed file with a level (high, medium, low) and its reasons, from the `riskRules` in `profiles.json` (shared build-file rules plus the detected profile's rules; another profile's rules never apply), plus "no test named after it" (the `affected` mapping) and more than 200 changed lines. `highRisk` and `riskNext`: a high file means `affected` stage D runs before G5. Without a profile only the shared rules apply, and the output says so.
+- `trace -Id <PBI> [-Path <.trx file or folder>]`: each AC of spec.md, the tests the plan section 6 Test column lists for it (`file::name`), and their outcome in the TRX results: COVERED, FAILING, NOT RUN, or MISSING. A bare name found in several classes is reported as ambiguous (NOT RUN); `file::name` picks the class; data rows count as one test; the newest result per test wins. Without results nothing is assumed to pass.
+- `prtext -Id <PBI>`: a PR description (summary, tasks, trace, change risk, the Sonar table or "SonarCloud not verified", and the time elapsed between approvals, labelled as including review time) written to the task's `evidence\pr-description.md` and printed. Secrets are redacted; it never creates a pull request, commits, or pushes.
+- Custom review rules: `review` also reads `<AKZO_HOME>\profiles-custom\review-rules.json` (`[{ id, profile, pathGlob, regex, severity, message }]`) on changed lines. An unreadable file or an invalid rule is one `custom-rule-invalid` warning; the built-in scenarios are unchanged.
+- `coverage` returns `threshold` and `meetsThreshold`: the repository's `quality.coverage` from the registry, else 80%. A coverage condition of the server quality gate replaces both.
+
+**Changed**
+- Agent: change risk listed in the handover; `trace` before G5 (G5 blocked on MISSING or FAILING, the handover matrix built from `trace` output); `prtext` for the PR text; Fix PR comments proposes a custom review rule as text for a recurring verified comment (the developer approves the file change); Fix Issue retries a fix up to 3 times instead of ending with a findings list; the Sonar table lists the rules checked (only rules confirmed active count as Sonar rules), compiler and .NET analyzer warnings go with the build results, and "SonarCloud passed" needs the server or the CI gate.
+- Profiles: `riskRules`; the DAB and CDMS Sonar rules list S3900, S4055, S1541, and S1200 as "confirm active first" and CS1572, CS1573, and CA1860 as build warnings. Every fixed "80%" reads "the repository's threshold (default 80%)".
+- `install.ps1 -Verify`: a renamed copy of the agent inside the install folders (`.copilot\agents`, the Visual Studio agents folder) is an Old-version conflict. The version comparison with the package already existed.
+- Plan template: `trace` reads the Test column.
+
+**Tests:** 16 new checks (change risk without a profile, DAB, CDMS; trace statuses, ambiguity, missing results; prtext; custom rules and an unreadable rules file; renamed agent copy; coverage threshold; agent wording). Result 2026-10-29: 386 passed, 0 failed; window tests (`test-gui.ps1`) 14 passed, 0 failed.
+
+**NOT VERIFIED:** how Copilot follows the new instructions in a live session; the SonarCloud gates of DAB and CDMS (their `quality.coverage` is not set until read from SonarCloud); `trace` on TRX files from the real DAB and CDMS test runs; Visual Studio 2026.
+
+**Deferred:** golden-case evaluation (`eval`; agent behavior in a live session stays NOT VERIFIED until it exists), a doctor score, a metrics command, a `learn` command, moving the built-in review rules to JSON, and new guide files. The UI (Angular) profile is blocked until its repository files are available.
+
 ## 3.10.0 — 2026-10-29
 Readable gates and tasks, recorded gate decisions, and Git and generated-client checks. No application source and no setup window changed.
 

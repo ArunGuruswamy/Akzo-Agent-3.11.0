@@ -47,7 +47,7 @@ Quality baseline (before the first edit) and final result:
 
 ### Sonar (agent section 6a)
 Source: <(a) Sonar tools in chat · (b) helper server query · (c) analyzers in build/lint · (d) IDE problems · (e) scanner run (on request) · (f) static review against the code rules, not a Sonar analysis>  
-Gate: <project gate from server | defaults: 0 new issues, hotspots reviewed, changed-line coverage >= 80%, new duplication <= 3%>
+Gate: <project gate from server | defaults: 0 new issues, hotspots reviewed, changed-line coverage >= the repository's threshold (default 80%), new duplication <= 3%>
 
 | Item | Baseline | Final | Evidence |
 |------|----------|-------|----------|
@@ -70,7 +70,7 @@ Gate: <project gate from server | defaults: 0 new issues, hotspots reviewed, cha
 - <date> T1 done — <files changed>, V1 passed (`<command>`, <n> tests)
 - Unavailable checks: <check — reason>
 
-Requirement -> test -> code matrix (handover):
+Requirement -> test -> code matrix (handover). `trace` reads the Test column: one or more `file::name` per row, separated by commas.
 | REQ | Class | AC | Test (file::name) | Code (`path:line`) | Result (passed / failed / not run - reason) |
 |-----|-------|----|-------------------|--------------------|---------------------------------------------|
 

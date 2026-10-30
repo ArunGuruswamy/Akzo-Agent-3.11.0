@@ -595,7 +595,9 @@ if ($Verify) {
         else { & $add 'Verified' 'Visual Studio agent configuration' "Visual Studio $($new -join ', '): agent file in $VisualStudioAgentsDir (the default user agent folder; it must match Tools > Options > GitHub > Copilot if you changed it)." }
     }
     $twins = @(foreach ($d in @($VSCodeUserDirs | ForEach-Object { Join-Path $_ 'prompts' }) + @((Join-Path $HomeRoot '.claude\agents'))) {
-            Get-ChildItem -LiteralPath $d -Filter *.agent.md -File -ErrorAction SilentlyContinue | Where-Object { [IO.File]::ReadAllText($_.FullName) -match '(?m)^name:\s*["'']?akzo-master-sdd' } | ForEach-Object { $_.FullName } })
+            Get-ChildItem -LiteralPath $d -Filter *.agent.md -File -ErrorAction SilentlyContinue | Where-Object { [IO.File]::ReadAllText($_.FullName) -match '(?m)^name:\s*["'']?akzo-master-sdd' } | ForEach-Object { $_.FullName } }) +
+        @(foreach ($d in @((Join-Path $HomeRoot '.copilot\agents'), $VisualStudioAgentsDir) | Sort-Object -Unique) {   # the install folders: a renamed copy there is a second agent
+            Get-ChildItem -LiteralPath $d -Filter *.agent.md -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'akzo-master-sdd.agent.md' -and [IO.File]::ReadAllText($_.FullName) -match '(?m)^name:\s*["'']?akzo-master-sdd' } | ForEach-Object { $_.FullName } })
     $legacy = @(Get-LegacyAgentFile)
     if ($legacy.Count -or $twins.Count) { & $add 'Failed' 'Old-version conflicts' "other Akzo agent files are discovered too: $(@($legacy + $twins) -join ', '). Repair removes earlier agents (backed up); remove copies you placed yourself." }
     else { & $add 'Verified' 'Old-version conflicts' 'no earlier or duplicate Akzo agent file in the agent folders.' }

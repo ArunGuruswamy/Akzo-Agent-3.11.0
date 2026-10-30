@@ -21,7 +21,8 @@ findings. Local compilation does not prove remote SonarCloud success.
   on changed lines.
 - **XML documentation** on new or changed public production APIs (policy; see `cdms-xml-documentation`). `review` checks
   it.
-- **Coverage of changed code at least 80%** where measurable (policy; see `cdms-coverage`).
+- **Coverage of changed code at least the repository's threshold (default 80%)** where measurable (policy; see
+  `cdms-coverage`).
 - **Registration and XRM conventions** (policy): handlers discovered by the Scrutor scan; XRM services registered in the
   CRM service registration extension; CRM access through `CrmOperationBase` implementations.
 - **No broad `catch (Exception)`** in new code unless the sibling pattern at that layer does exactly that; example code
@@ -79,3 +80,18 @@ findings. Local compilation does not prove remote SonarCloud success.
 
 ## Code style
 - No commented-out code (S125); no new TODO or FIXME (S1135); no empty methods without a reason (S1186).
+
+## Rules to confirm against the quality profile
+Apply these only after confirming each is active with `sonar -Repo <id> -Check rule -Key csharpsquid:<key>` (or the Sonar
+tools in chat); until then they are code-quality guidance, never reported as SonarCloud findings.
+- Validate arguments of public methods against null before use (S3900).
+- Do not pass string literals as localized parameters; use resources where siblings do (S4055).
+- Keep cyclomatic complexity of methods within the profile's threshold (S1541).
+- Keep a class coupled to a limited number of other classes; split responsibilities instead (S1200).
+
+## Build warnings (compiler and .NET analyzers, not Sonar rules)
+Fix these from the build output and list them with the build results, never in the Sonar table:
+- CS1572: an XML `<param>` names a parameter the method does not have; CS1573: a parameter has no `<param>` while
+  others do. Update the documentation with the signature (`review` also reports it).
+- CA1860: use `Count`, `Length`, or `IsEmpty` instead of `Any()` on collections that have them (`Any()` stays right for
+  plain `IEnumerable<T>`, S1155).

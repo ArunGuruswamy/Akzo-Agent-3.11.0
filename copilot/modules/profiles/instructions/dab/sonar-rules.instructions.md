@@ -66,6 +66,21 @@ a policy or code-rule finding, not as a SonarCloud finding. Local compilation do
 - No commented-out code (S125); no new TODO or FIXME (S1135); no empty methods without a comment that says why (S1186).
 - Follow `.editorconfig` and the analyzer configuration of the solution.
 
+## Rules to confirm against the quality profile
+Apply these only after confirming each is active with `sonar -Repo <id> -Check rule -Key csharpsquid:<key>` (or the Sonar
+tools in chat); until then they are code-quality guidance, never reported as SonarCloud findings.
+- Validate arguments of public methods against null before use (S3900).
+- Do not pass string literals as localized parameters; use resources where siblings do (S4055).
+- Keep cyclomatic complexity of methods within the profile's threshold (S1541).
+- Keep a class coupled to a limited number of other classes; split responsibilities instead (S1200).
+
+## Build warnings (compiler and .NET analyzers, not Sonar rules)
+Fix these from the build output and list them with the build results, never in the Sonar table:
+- CS1572: an XML `<param>` names a parameter the method does not have; CS1573: a parameter has no `<param>` while
+  others do. Update the documentation with the signature.
+- CA1860: use `Count`, `Length`, or `IsEmpty` instead of `Any()` on collections that have them (`Any()` stays right for
+  plain `IEnumerable<T>`, S1155).
+
 ## Not DAB requirements unless the DAB configuration enforces them
 CDMS policy items (200-character lines, mandatory XML documentation on all public APIs, CDMS registration conventions)
 are not applied here by default.
